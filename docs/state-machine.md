@@ -10,27 +10,37 @@ Every article tracks per-platform status independently. Each platform property o
 │   🚧   │  │   🚀   │   │   ✅   │   │   ⏰   │   │   📢   │
 │  Draft  │──│ Ready  │──▶│ Created│──▶│Scheduled│──▶│Published│
 └────────┘  └────────┘   └────────┘   └────────┘   └────────┘
-               you set     pipeline      pipeline      pipeline
-              manually      sets          sets          sets
+               you set    you or your    pipeline      pipeline
+              manually    automation      sets          sets
                               │
-                              │ on failure
+                              │ (manual or automated)
                               ▼
-                         rollback to 🚀
+                    content exists in platform DB
 ```
 
 | State | Who sets it | What it means |
 |-------|-------------|---------------|
 | 🚧 | You | Draft. Not ready for the pipeline. |
-| 🚀 | You | Ready. Triggers generation/sync. |
-| ✅ | Pipeline | Content has been created in the platform database. |
+| 🚀 | You | Ready. You intend to publish on this platform. |
+| ✅ | You (or your automation) | Content is written in the platform database and ready to schedule. |
 | ⏰ | Pipeline | Publication date is set and in the future. |
 | 📢 | Pipeline | Published. URL is written back to the database. |
 
+> **Important:** This pipeline does NOT generate content. The 🚀 → ✅ transition is **your responsibility**. You write the post (manually, with AI prompts, or with your own automation), then mark it ✅. The pipeline takes over from ✅ onward.
+>
+> If you set 🚀 but never write content and never set ✅, the article simply stays at 🚀. The pipeline will not touch it. This is by design — the pipeline publishes what you put in the databases, nothing more.
+
 ## Transition rules
 
-### 🚀 → ✅ (Content creation)
+### 🚀 → ✅ (Content creation — manual by default)
 
-The sync script detects articles with status 🚀 and processes them:
+This is the **content creation step**. By default, it is manual:
+
+1. You set 🚀 on a platform — this signals your intent to publish there
+2. You write the post content in the platform database (page body)
+3. You set the status to ✅ — this tells the pipeline the content is ready
+
+**This is the extension point.** You can automate this step with your own scripts (AI-based or otherwise). If you build automation for 🚀 → ✅, apply the same safety patterns:
 
 1. **Check for duplicates** — query the platform database to see if a page already exists for this article (via the Articles relation)
 2. **Lock the article** — immediately set status from 🚀 to ✅, BEFORE creating the platform page
@@ -50,10 +60,38 @@ The publisher script detects posts with a publication date in the future and an 
 When the publication date arrives:
 
 1. **Guard check** — verify the article status is not already 📢 (anti-republication)
-2. **Idempotency flag** — write a temporary URL like `publishing.in.progress` to claim the post
-3. **API call** — publish to the platform
-4. **On success** — write the real URL, set status to 📢
-5. **On failure** — clear the temporary URL, status stays at ⏰
+2. **Content validation** — verify the post body is not empty (see below)
+3. **Idempotency flag** — write a temporary URL like `publishing.in.progress` to claim the post
+4. **API call** — publish to the platform
+5. **On success** — write the real URL, set status to 📢
+6. **On failure** — clear the temporary URL, status stays at ⏰
+
+## Content validation guard
+
+The pipeline must never publish an empty post. Before calling any platform API, the publisher script validates that content exists:
+
+```python
+def get_post_content(page_id):
+    """Extract page body content. Returns text or raises ValueError."""
+    blocks = notion.blocks.children.list(block_id=page_id)["results"]
+    text_blocks = [b for b in blocks if b["type"] in ("paragraph", "heading_1", "heading_2", "heading_3", "bulleted_list_item", "numbered_list_item", "quote")]
+    content = ""
+    for block in text_blocks:
+        rich_texts = block[block["type"]].get("rich_text", [])
+        content += "".join(rt["plain_text"] for rt in rich_texts)
+    content = content.strip()
+    if not content:
+        raise ValueError(f"Post {page_id} has no content — skipping publication")
+    return content
+```
+
+**What happens when content is empty:**
+- The publisher skips the post and logs a warning
+- The status stays at ⏰ — no rollback, no retry spam
+- The post will be retried on the next cycle, giving the user time to add content
+- A webhook notification is sent (if configured) so the user knows something needs attention
+
+This guard prevents accidental publication of blank posts if someone sets ✅ and ⏰ before writing content.
 
 ## Anti-duplicate protection
 

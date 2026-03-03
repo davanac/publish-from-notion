@@ -97,6 +97,23 @@ notify_webhook() {
 }
 
 # =============================================================================
+# Content validation reminder
+# =============================================================================
+# The publisher Python scripts include a content validation guard that prevents
+# publishing empty posts. The get_post_content() function checks that the
+# Notion page body has actual text content before calling any platform API.
+#
+# If a post body is empty:
+#   - The publisher skips the post (no API call)
+#   - The status stays at Scheduled (no rollback, no retry spam)
+#   - A log message warns about the empty post
+#   - A webhook notification is sent (if configured)
+#
+# This guard is implemented in Python, not Bash, because it requires
+# the Notion API to read page blocks. See docs/state-machine.md for details.
+# =============================================================================
+
+# =============================================================================
 # Run with failure notification
 # =============================================================================
 # Executes a command and sends a webhook alert if it fails.

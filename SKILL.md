@@ -105,20 +105,24 @@ Explain how articles flow through the pipeline.
   Draft        Ready       Generated    Scheduled    Published
     🚧    ->    🚀    ->     ✅     ->     ⏰    ->     📢
 
-              you set      pipeline     pipeline     pipeline
-             manually       sets         sets         sets
+              you set     you or your   pipeline     pipeline
+             manually     automation     sets         sets
 ```
 
 **Who does what:**
 
 | Transition | Who | What happens |
 |------------|-----|-------------|
-| -> Ready | User | Marks the article ready for a platform |
-| Ready -> Generated | Pipeline | Sync script creates a page in the platform database |
+| -> Ready | User | Marks the article as "I want to publish on this platform" |
+| Ready -> Generated | **User** | You write the post in the platform database, then set ✅ |
 | Generated -> Scheduled | Pipeline | Date orchestrator sets publication dates |
 | Scheduled -> Published | Pipeline | Publisher script calls the platform API |
 
+> **Key point:** The 🚀 → ✅ step is **manual by default**. The pipeline does not generate content. You write the post (manually, with AI prompts, or with your own automation), then mark it ✅. If you never write content, the article stays at 🚀 — the pipeline won't touch it. This is by design.
+
 **On failure:** The pipeline rolls back to the previous state so the next cycle can retry automatically.
+
+**Empty content guard:** The publisher validates that the post body is not empty before calling any platform API. An empty post stays at ⏰ and is skipped until content is added.
 
 Full details: `docs/state-machine.md`
 
@@ -290,6 +294,21 @@ def mark_published(post_id, url, article_id):
         properties={STATUS_PROPERTY: {"select": {"name": "Published"}}},
     )
 
+def get_post_content(page_id):
+    """Extract page body content. Raises ValueError if empty."""
+    blocks = notion.blocks.children.list(block_id=page_id)["results"]
+    text_types = ("paragraph", "heading_1", "heading_2", "heading_3",
+                  "bulleted_list_item", "numbered_list_item", "quote")
+    content = ""
+    for block in blocks:
+        if block["type"] in text_types:
+            rich_texts = block[block["type"]].get("rich_text", [])
+            content += "".join(rt["plain_text"] for rt in rich_texts)
+    content = content.strip()
+    if not content:
+        raise ValueError(f"Post {page_id} has no content")
+    return content
+
 def publish_to_platform(post_content):
     """Call the platform API. Returns the published URL."""
     # Platform-specific implementation goes here
@@ -309,13 +328,17 @@ def main():
         if status == "Published":
             continue
 
+        # Guard: skip if post body is empty
+        try:
+            content = get_post_content(post["id"])
+        except ValueError as e:
+            print(f"Skipping {post['id']}: {e}")
+            continue
+
         # Claim the post
         set_idempotency_flag(post["id"])
 
         try:
-            # Extract post content from page body
-            content = get_post_content(post["id"])  # Implement per platform
-
             # Publish
             published_url = publish_to_platform(content)
 
@@ -366,7 +389,7 @@ Generate one wrapper per pipeline script. For a full setup (Ghost + 5 social), t
 
 Generate only the scripts for selected platforms.
 
-### Step 6: Content generation extension point
+### Step 6: Content creation (your responsibility)
 
 **This is critical to communicate clearly.**
 
@@ -374,17 +397,23 @@ The pipeline does NOT generate content. It publishes what you put in the databas
 
 The workflow is:
 1. **You write your article** in Notion (the Ghost sync pushes it to Ghost directly)
-2. **You create platform-specific posts** in each platform database
-3. **The pipeline publishes them** at the scheduled time
+2. **You set 🚀 (Ready)** on a platform in the Articles database — this signals your intent
+3. **You write the post** in the platform database (e.g., LinkedIn, Twitter)
+4. **You set ✅ (Generated)** — this tells the pipeline the content is ready
+5. **The pipeline takes over** — scheduling, publication, anti-duplicate guards
+
+**The 🚀 → ✅ step is manual by default.** If you set 🚀 but never write content and never set ✅, the article stays at 🚀 forever. The pipeline will not touch it. This is by design — the pipeline handles logistics, not editorial decisions.
 
 This is the extension point. You can:
 - **Write manually** in each platform database
 - **Use AI prompts** to generate differentiated posts from your Ghost article
 - **Build your own automation** that reads from the Articles database and creates platform posts
 
-The pipeline doesn't care how content gets into the databases. It only cares that it's there when publication time arrives.
+The pipeline doesn't care how content gets into the databases. It only cares that:
+1. Content exists in the page body (the publisher validates this — empty posts are skipped)
+2. The status is ✅ or beyond
 
-Tell the user: "This is where you plug in your own content generation. Use your favorite AI prompts, write manually, or build your own automation -- the pipeline handles the rest."
+Tell the user: "This is where you plug in your own content generation. Use your favorite AI prompts, write manually, or build your own automation -- the pipeline handles the rest. Just make sure the post has content before marking it ✅."
 
 ### Step 7: Scheduler setup
 
@@ -516,12 +545,12 @@ Five states, three automated transitions:
 | State | Emoji | Set by | Next |
 |-------|-------|--------|------|
 | Draft | `Draft` | User | Ready (manual) |
-| Ready | `Ready` | User | Generated (pipeline) |
-| Generated | `Generated` | Pipeline | Scheduled (pipeline) |
+| Ready | `Ready` | User | Generated (you write content, then set ✅) |
+| Generated | `Generated` | User (or automation) | Scheduled (pipeline) |
 | Scheduled | `Scheduled` | Pipeline | Published (pipeline) |
 | Published | `Published` | Pipeline | Terminal |
 
-On failure: rollback to previous state for automatic retry.
+On failure: rollback to previous state for automatic retry. Empty posts are skipped (content validation guard).
 
 Full reference: `docs/state-machine.md`
 

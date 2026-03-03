@@ -107,21 +107,25 @@ Expliquez comment les articles progressent dans le pipeline.
   Draft        Ready       Generated    Scheduled    Published
     🚧    ->    🚀    ->     ✅     ->     ⏰    ->     📢
 
-              vous le      le pipeline   le pipeline   le pipeline
-             definissez     definit       definit       definit
-             manuellement
+              vous le      vous ou      le pipeline   le pipeline
+             definissez    votre auto-   definit       definit
+             manuellement  matisation
 ```
 
 **Qui fait quoi :**
 
 | Transition | Qui | Ce qui se passe |
 |------------|-----|-----------------|
-| -> Ready | Utilisateur | Marque l'article pret pour une plateforme |
-| Ready -> Generated | Pipeline | Le script de synchronisation cree une page dans la base plateforme |
+| -> Ready | Utilisateur | Signale l'intention de publier sur cette plateforme |
+| Ready -> Generated | **Utilisateur** | Vous redigez le post dans la base plateforme, puis passez a ✅ |
 | Generated -> Scheduled | Pipeline | L'orchestrateur de dates definit les dates de publication |
 | Scheduled -> Published | Pipeline | Le script de publication appelle l'API de la plateforme |
 
+> **Point cle :** L'etape 🚀 → ✅ est **manuelle par defaut**. Le pipeline ne genere pas de contenu. Vous redigez le post (manuellement, avec des prompts IA, ou avec votre propre automatisation), puis vous le marquez ✅. Si vous ne redigez jamais le contenu, l'article reste a 🚀 — le pipeline ne le touchera pas. C'est volontaire.
+
 **En cas d'echec :** le pipeline revient a l'etat precedent pour que le cycle suivant puisse reessayer automatiquement.
+
+**Garde-fou contenu vide :** Le publisher verifie que le corps du post n'est pas vide avant d'appeler l'API de la plateforme. Un post vide reste a ⏰ et est ignore jusqu'a ce que du contenu soit ajoute.
 
 Details complets : `docs/state-machine.md`
 
@@ -293,6 +297,21 @@ def mark_published(post_id, url, article_id):
         properties={STATUS_PROPERTY: {"select": {"name": "Published"}}},
     )
 
+def get_post_content(page_id):
+    """Extract page body content. Raises ValueError if empty."""
+    blocks = notion.blocks.children.list(block_id=page_id)["results"]
+    text_types = ("paragraph", "heading_1", "heading_2", "heading_3",
+                  "bulleted_list_item", "numbered_list_item", "quote")
+    content = ""
+    for block in blocks:
+        if block["type"] in text_types:
+            rich_texts = block[block["type"]].get("rich_text", [])
+            content += "".join(rt["plain_text"] for rt in rich_texts)
+    content = content.strip()
+    if not content:
+        raise ValueError(f"Post {page_id} has no content")
+    return content
+
 def publish_to_platform(post_content):
     """Call the platform API. Returns the published URL."""
     # Platform-specific implementation goes here
@@ -312,13 +331,17 @@ def main():
         if status == "Published":
             continue
 
+        # Guard: skip if post body is empty
+        try:
+            content = get_post_content(post["id"])
+        except ValueError as e:
+            print(f"Skipping {post['id']}: {e}")
+            continue
+
         # Claim the post
         set_idempotency_flag(post["id"])
 
         try:
-            # Extract post content from page body
-            content = get_post_content(post["id"])  # Implement per platform
-
             # Publish
             published_url = publish_to_platform(content)
 
@@ -369,7 +392,7 @@ Generez un wrapper par script du pipeline. Pour une configuration complete (Ghos
 
 Ne generez que les scripts des plateformes selectionnees.
 
-### Etape 6 : Point d'extension pour la generation de contenu
+### Etape 6 : Creation du contenu (votre responsabilite)
 
 **Ce point est essentiel a communiquer clairement.**
 
@@ -377,17 +400,23 @@ Le pipeline ne genere PAS de contenu. Il publie ce que vous placez dans les base
 
 Le flux de travail est le suivant :
 1. **Vous redigez votre article** dans Notion (la synchronisation Ghost le pousse directement vers Ghost)
-2. **Vous creez des posts adaptes a chaque plateforme** dans chaque base plateforme
-3. **Le pipeline les publie** a l'heure planifiee
+2. **Vous passez a 🚀 (Ready)** sur une plateforme dans la base Articles — cela signale votre intention
+3. **Vous redigez le post** dans la base plateforme (ex. LinkedIn, Twitter)
+4. **Vous passez a ✅ (Generated)** — cela indique au pipeline que le contenu est pret
+5. **Le pipeline prend le relais** — planification, publication, gardes anti-doublon
+
+**L'etape 🚀 → ✅ est manuelle par defaut.** Si vous passez a 🚀 sans jamais rediger de contenu ni passer a ✅, l'article reste a 🚀 indefiniment. Le pipeline ne le touchera pas. C'est volontaire — le pipeline gere la logistique, pas les decisions editoriales.
 
 C'est le point d'extension. Vous pouvez :
 - **Rediger manuellement** dans chaque base plateforme
 - **Utiliser des prompts IA** pour generer des posts differencies a partir de votre article Ghost
 - **Construire votre propre automatisation** qui lit la base Articles et cree les posts plateforme
 
-Le pipeline ne se soucie pas de la facon dont le contenu arrive dans les bases. Il se soucie uniquement de sa presence au moment de la publication.
+Le pipeline ne se soucie pas de la facon dont le contenu arrive dans les bases. Il se soucie uniquement :
+1. Que du contenu existe dans le corps de la page (le publisher le verifie — les posts vides sont ignores)
+2. Que le statut soit a ✅ ou au-dela
 
-Dites a l'utilisateur : "C'est ici que vous branchez votre propre generation de contenu. Utilisez vos prompts IA preferes, redigez manuellement, ou construisez votre propre automatisation -- le pipeline gere le reste."
+Dites a l'utilisateur : "C'est ici que vous branchez votre propre generation de contenu. Utilisez vos prompts IA preferes, redigez manuellement, ou construisez votre propre automatisation -- le pipeline gere le reste. Assurez-vous simplement que le post contient du contenu avant de le marquer ✅."
 
 ### Etape 7 : Configuration du planificateur
 
@@ -519,12 +548,12 @@ Cinq etats, trois transitions automatisees :
 | Etat | Emoji | Defini par | Suivant |
 |------|-------|------------|---------|
 | Draft | `Draft` | Utilisateur | Ready (manuel) |
-| Ready | `Ready` | Utilisateur | Generated (pipeline) |
-| Generated | `Generated` | Pipeline | Scheduled (pipeline) |
+| Ready | `Ready` | Utilisateur | Generated (vous redigez le contenu, puis passez a ✅) |
+| Generated | `Generated` | Utilisateur (ou automatisation) | Scheduled (pipeline) |
 | Scheduled | `Scheduled` | Pipeline | Published (pipeline) |
 | Published | `Published` | Pipeline | Terminal |
 
-En cas d'echec : retour a l'etat precedent pour reessai automatique.
+En cas d'echec : retour a l'etat precedent pour reessai automatique. Les posts vides sont ignores (garde-fou de validation du contenu).
 
 Reference complete : `docs/state-machine.md`
 
