@@ -1,0 +1,35 @@
+# =============================================================================
+# systemd service template for publish-from-notion (Linux)
+# =============================================================================
+# Replace placeholders:
+#   PLATFORM    — platform name (e.g., ghost, linkedin, twitter)
+#   YOURUSER    — your Linux username
+#   /path/to/your/project — absolute path to your project directory
+#
+# Install (user-level):
+#   mkdir -p ~/.config/systemd/user/
+#   cp this.service ~/.config/systemd/user/notion-PLATFORM-sync.service
+#   cp systemd.timer ~/.config/systemd/user/notion-PLATFORM-sync.timer
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now notion-PLATFORM-sync.timer
+#
+# Check status:
+#   systemctl --user status notion-PLATFORM-sync.timer
+#   journalctl --user -u notion-PLATFORM-sync.service
+# =============================================================================
+
+[Unit]
+Description=Notion to PLATFORM sync (publish-from-notion)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /path/to/your/project/scripts/run_PLATFORM_sync.sh
+WorkingDirectory=/path/to/your/project
+StandardOutput=append:/path/to/your/project/logs/PLATFORM_sync.log
+StandardError=append:/path/to/your/project/logs/PLATFORM_sync_error.log
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

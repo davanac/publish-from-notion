@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS LaunchAgent template for publish-from-notion
+
+  Replace placeholders:
+    YOURNAME    — your identifier (e.g., johndoe)
+    PLATFORM    — platform name (e.g., ghost, linkedin, twitter)
+    INTERVAL    — polling interval in seconds:
+                  60s  for publishers (time-sensitive)
+                  120s for sync scripts
+                  600s for generation scripts
+    /path/to/your/project — absolute path to your project directory
+
+  Install:
+    cp this.plist ~/Library/LaunchAgents/com.YOURNAME.PLATFORM-sync.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.YOURNAME.PLATFORM-sync.plist
+
+  Uninstall:
+    launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.YOURNAME.PLATFORM-sync.plist
+    rm ~/Library/LaunchAgents/com.YOURNAME.PLATFORM-sync.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.YOURNAME.PLATFORM-sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/path/to/your/project/scripts/run_PLATFORM_sync.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/path/to/your/project</string>
+
+    <key>StartInterval</key>
+    <integer>120</integer>
+
+    <key>StandardOutPath</key>
+    <string>/path/to/your/project/logs/PLATFORM_sync.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/path/to/your/project/logs/PLATFORM_sync_error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
